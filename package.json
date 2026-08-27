@@ -1,0 +1,20 @@
+{
+  "name": "oronimbus-wda-browser-lab-build",
+  "version": "0.2.3",
+  "private": true,
+  "description": "Build tooling for the controlled OroNimbus Electron WDA browser lab",
+  "gypfile": true,
+  "scripts": {
+    "build:addon:arm64": "node-gyp rebuild --target=43.4.1 --arch=arm64 --dist-url=https://electronjs.org/headers",
+    "package:arm64": "node pack.mjs arm64",
+    "package:x64": "node pack.mjs x64"
+  },
+  "dependencies": {
+    "node-addon-api": "8.9.2"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "43.4.1",
+    "node-gyp": "12.1.0"
+  }
+}

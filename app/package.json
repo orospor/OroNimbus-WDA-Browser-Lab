@@ -1,0 +1,8 @@
+{
+  "name": "oronimbus",
+  "productName": "OroNimbus",
+  "version": "0.2.3",
+  "private": true,
+  "main": "main.js",
+  "description": "Controlled Electron browser fixture for Windows Display Affinity research"
+}

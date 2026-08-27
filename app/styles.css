@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #0b1018;
+  color: #e8eef8;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+
+header {
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: linear-gradient(120deg, #111a27, #0c1320);
+  border-bottom: 1px solid #243147;
+}
+
+.brand, .state, nav { display: flex; align-items: center; }
+.brand { gap: 10px; }
+.brand div { display: grid; }
+.brand strong { font-size: 17px; letter-spacing: 0.2px; }
+.brand small { color: #8fa3bd; font-size: 11px; }
+.mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #e3ae43, #8d5f09);
+  color: #12100a;
+  font-weight: 900;
+}
+
+.state { gap: 10px; color: #aab9ce; font-size: 12px; }
+.mode {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #253047;
+  color: #dce6f6;
+  font-weight: 700;
+}
+.mode.exclude { background: #612534; color: #ffd7df; }
+.mode.monitor { background: #634f16; color: #fff0b8; }
+.mode.none { background: #174d3b; color: #c5ffe9; }
+.mode.error { background: #7b1f1f; color: #fff; }
+
+nav {
+  height: 48px;
+  gap: 7px;
+  padding: 7px 12px;
+  background: #111925;
+  border-bottom: 1px solid #273449;
+}
+
+button {
+  border: 1px solid #34445c;
+  border-radius: 8px;
+  background: #182335;
+  color: #e7edf7;
+  height: 32px;
+  padding: 0 11px;
+  cursor: pointer;
+}
+button:hover { background: #23324a; }
+button.exit { border-color: #6e3440; background: #3a1d25; color: #ffdbe2; }
+button.exit:hover { background: #582632; }
+nav button { width: 36px; padding: 0; font-size: 18px; }
+form { flex: 1; }
+input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid #36465e;
+  border-radius: 9px;
+  outline: none;
+  padding: 0 12px;
+  color: #eaf0fa;
+  background: #0b111b;
+}
+input:focus { border-color: #d09a33; box-shadow: 0 0 0 2px #d09a3328; }
+#process { min-width: 170px; color: #7f93ae; font-size: 11px; text-align: right; }

@@ -1,0 +1,18 @@
+[package]
+name = "orowda-launcher"
+version = "0.2.3"
+edition = "2024"
+description = "Controller for the OroNimbus Electron WDA browser lab"
+
+[dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

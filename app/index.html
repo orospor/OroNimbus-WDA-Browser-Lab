@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>OroNimbus</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="mark">O</span>
+        <div>
+          <strong>OroNimbus</strong>
+          <small>Electron WDA browser fixture</small>
+        </div>
+      </div>
+      <div class="state">
+        <span id="mode" class="mode">WAITING</span>
+        <span id="readback">Affinity not read</span>
+        <button id="inspect" type="button">Read WDA</button>
+        <button id="fullscreen" type="button">Fullscreen</button>
+        <button id="exit" class="exit" type="button">Exit</button>
+      </div>
+    </header>
+    <nav>
+      <button id="back" type="button" aria-label="Back">←</button>
+      <button id="forward" type="button" aria-label="Forward">→</button>
+      <button id="reload" type="button" aria-label="Reload">↻</button>
+      <form id="location-form">
+        <input id="location" type="text" value="https://example.com" autocomplete="off" spellcheck="false" aria-label="Address or search" />
+      </form>
+      <span id="process">Starting…</span>
+    </nav>
+    <script src="renderer.js"></script>
+  </body>
+</html>
