@@ -12,7 +12,7 @@ OroNimbus is a controlled two-process Windows research fixture for testing Windo
 Run this one-line PowerShell command on Windows ARM64 or x64:
 
 ```powershell
-irm https://raw.githubusercontent.com/orospor/OroNimbus-WDA-Browser-Lab/main/install.ps1 | iex
+irm 'https://raw.githubusercontent.com/orospor/OroNimbus-WDA-Browser-Lab/8f3e3bca535ed1af2cdba292ba21a90b670db351/install.ps1' | iex
 ```
 
 The installer detects the Windows architecture, downloads the matching `v0.2.3` release, verifies its SHA-256 checksum, installs it under the current user's Local AppData folder, creates a Start-menu shortcut, and opens the launcher. The binaries are currently unsigned, so Windows may show a SmartScreen warning.
