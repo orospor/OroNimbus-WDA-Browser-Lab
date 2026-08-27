@@ -13,10 +13,21 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'OroNimbus WDA Browser Lab requires Windows.'
 }
 
-$architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
-    ([System.Runtime.InteropServices.Architecture]::Arm64) { 'arm64' }
-    ([System.Runtime.InteropServices.Architecture]::X64) { 'x64' }
-    default { throw "Unsupported Windows architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" }
+$nativeArchitecture = if (-not [string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITEW6432)) {
+    $env:PROCESSOR_ARCHITEW6432
+}
+else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+
+if ([string]::IsNullOrWhiteSpace($nativeArchitecture)) {
+    throw 'Windows did not report a processor architecture.'
+}
+
+$architecture = switch ($nativeArchitecture.ToUpperInvariant()) {
+    'ARM64' { 'arm64' }
+    'AMD64' { 'x64' }
+    default { throw "Unsupported Windows architecture: $nativeArchitecture" }
 }
 
 $repository = 'orospor/OroNimbus-WDA-Browser-Lab'
