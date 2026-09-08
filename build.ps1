@@ -78,6 +78,7 @@ try {
     Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $bundleRoot "OroWdaLauncher.exe")
     Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $bundleRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot "VERIFICATION.md") -Destination $bundleRoot
+    Copy-Item -LiteralPath (Join-Path $projectRoot "DEFENSE-EVIDENCE.md") -Destination $bundleRoot
 
     if (Test-Path -LiteralPath $archivePath) {
         Remove-Item -LiteralPath $archivePath -Force

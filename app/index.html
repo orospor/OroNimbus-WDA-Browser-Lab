@@ -19,7 +19,9 @@
       <div class="state">
         <span id="mode" class="mode">WAITING</span>
         <span id="readback">Affinity not read</span>
+        <span id="defenses" class="defenses">Defenses pending</span>
         <button id="inspect" type="button">Read WDA</button>
+        <button id="clear" type="button" title="Lab-only: clear this window's affinity once">Clear once</button>
         <button id="fullscreen" type="button">Fullscreen</button>
         <button id="exit" class="exit" type="button">Exit</button>
       </div>
@@ -31,8 +33,29 @@
       <form id="location-form">
         <input id="location" type="text" value="https://example.com" autocomplete="off" spellcheck="false" aria-label="Address or search" />
       </form>
+      <select id="live-wda-mode" aria-label="Live WDA mode" title="Mode applied when WDA is turned on">
+        <option value="exclude">WDA EXCLUDE</option>
+        <option value="monitor">WDA MONITOR</option>
+      </select>
+      <button id="toggle-wda" class="wide" type="button">WDA on</button>
+      <button id="module-scan" class="wide" type="button" title="Current main PID; loader-visible module heuristic">Modules pending</button>
       <span id="process">Starting…</span>
     </nav>
+    <section id="module-panel" class="module-panel" hidden>
+      <div class="module-panel-heading">
+        <div>
+          <strong>Native module monitor <span>(heuristic)</span></strong>
+          <p id="module-summary">Waiting for the OroNimbus main-process baseline…</p>
+        </div>
+        <button id="module-panel-close" type="button" aria-label="Close module details">Close</button>
+      </div>
+      <p class="module-disclaimer">
+        Main PID only · loader-visible DLLs · first-seen paths are not proof of injection.
+        Present-at-baseline paths have unknown origin. Manual maps, shellcode, child processes,
+        transient loads, data-file loads, and blocked attempts can be missed.
+      </p>
+      <ol id="module-events" aria-label="Recent first-seen module paths"></ol>
+    </section>
     <script src="renderer.js"></script>
   </body>
 </html>

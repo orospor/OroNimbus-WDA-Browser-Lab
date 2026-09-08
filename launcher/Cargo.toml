@@ -1,6 +1,6 @@
 [package]
 name = "orowda-launcher"
-version = "0.2.3"
+version = "0.4.0"
 edition = "2024"
 description = "Controller for the OroNimbus Electron WDA browser lab"
 

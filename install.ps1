@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $Version = '0.2.3',
+    [string] $Version = '0.4.0',
 
     [switch] $NoLaunch
 )
@@ -31,41 +31,33 @@ $architecture = switch ($nativeArchitecture.ToUpperInvariant()) {
 }
 
 $repository = 'orospor/OroNimbus-WDA-Browser-Lab'
-$bundleName = "OroNimbus-WDA-Browser-Lab-v$Version-win-$architecture"
-$assetName = "$bundleName.zip"
+$assetName = "OroNimbus-WDA-Browser-Lab-v$Version-Setup-universal.exe"
 $releaseBase = "https://github.com/$repository/releases/download/v$Version"
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "OroNimbus-$([guid]::NewGuid().ToString('N'))"
-$archivePath = Join-Path $temporaryRoot $assetName
-$checksumPath = "$archivePath.sha256.txt"
-$installParent = Join-Path $env:LOCALAPPDATA 'Programs\OroNimbus-WDA-Browser-Lab'
-$installRoot = Join-Path $installParent $bundleName
+$setupPath = Join-Path $temporaryRoot $assetName
+$checksumPath = "$setupPath.sha256.txt"
+$installRoot = Join-Path $env:LOCALAPPDATA 'Programs\OroSpor\OroNimbus-WDA-Browser-Lab'
 
 New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
 try {
-    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$assetName" -OutFile $archivePath
+    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$assetName" -OutFile $setupPath
     Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$assetName.sha256.txt" -OutFile $checksumPath
 
     $expectedHash = ((Get-Content -Raw -Encoding ASCII -LiteralPath $checksumPath).Trim() -split '\s+')[0]
-    $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    $actualHash = (Get-FileHash -LiteralPath $setupPath -Algorithm SHA256).Hash
     if ($actualHash -ne $expectedHash) {
         throw 'OroNimbus download failed SHA-256 verification.'
     }
 
-    New-Item -ItemType Directory -Path $installParent -Force | Out-Null
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $installParent -Force
-    $launcherPath = Join-Path $installRoot 'OroWdaLauncher.exe'
-    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
-        throw "OroWdaLauncher.exe was not found after extraction at $launcherPath"
+    $setupProcess = Start-Process -FilePath $setupPath -ArgumentList @('/quiet', '/norestart') -Wait -PassThru
+    if ($setupProcess.ExitCode -notin @(0, 3010)) {
+        throw "OroNimbus setup failed with exit code $($setupProcess.ExitCode)."
     }
 
-    $programsFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
-    $shortcutPath = Join-Path $programsFolder 'OroNimbus WDA Browser Lab.lnk'
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $launcherPath
-    $shortcut.WorkingDirectory = $installRoot
-    $shortcut.Description = 'OroNimbus Windows Display Affinity research fixture'
-    $shortcut.Save()
+    $launcherPath = Join-Path $installRoot 'OroWdaLauncher.exe'
+    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+        throw "OroWdaLauncher.exe was not found after setup at $launcherPath"
+    }
 
     Write-Host "Installed OroNimbus WDA Browser Lab $Version ($architecture) to $installRoot"
     if (-not $NoLaunch) {

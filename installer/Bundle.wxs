@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Name="OroNimbus WDA Browser Lab"
+    Version="$(var.ProductVersion)"
+    Manufacturer="OroSpor"
+    UpgradeCode="{5E4938C7-7353-4C1A-A886-F872B2627AF9}"
+    Copyright="Copyright (c) OroSpor"
+    AboutUrl="https://github.com/orospor/OroNimbus-WDA-Browser-Lab"
+    Compressed="yes"
+    DisableModify="no">
+
+    <bal:Condition
+      Message="OroNimbus WDA Browser Lab requires 64-bit Windows 10 version 2004 or later, or Windows 11, on an x64 or ARM64 computer."
+      Condition="VersionNT64 AND WindowsBuildNumber &gt;= 19041 AND (NativeMachine = 34404 OR NativeMachine = 43620)" />
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+        LicenseUrl=""
+        Theme="hyperlinkLargeLicense"
+        ShowVersion="yes"
+        SuppressOptionsUI="yes"
+        LaunchTarget="[LocalAppDataFolder]Programs\OroSpor\OroNimbus-WDA-Browser-Lab\OroWdaLauncher.exe"
+        LaunchWorkingFolder="[LocalAppDataFolder]Programs\OroSpor\OroNimbus-WDA-Browser-Lab" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage
+        Id="OroNimbusX64"
+        SourceFile="$(var.X64Msi)"
+        InstallCondition="NativeMachine = 34404"
+        Compressed="yes"
+        Visible="no"
+        Vital="yes" />
+      <MsiPackage
+        Id="OroNimbusArm64"
+        SourceFile="$(var.Arm64Msi)"
+        InstallCondition="NativeMachine = 43620"
+        Compressed="yes"
+        Visible="no"
+        Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

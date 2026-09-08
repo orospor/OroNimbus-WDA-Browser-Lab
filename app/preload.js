@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('oroNimbus', {
   getState: () => ipcRenderer.invoke('lab:get-state'),
   inspect: () => ipcRenderer.invoke('lab:inspect'),
+  clearAffinity: () => ipcRenderer.invoke('lab:clear-affinity'),
+  setAffinityMode: (mode) => ipcRenderer.invoke('lab:set-affinity-mode', mode),
+  scanModules: () => ipcRenderer.invoke('lab:scan-modules'),
+  setModulePanelOpen: (open) => ipcRenderer.invoke('lab:set-module-panel-open', open),
   navigate: (value) => ipcRenderer.invoke('browser:navigate', value),
   back: () => ipcRenderer.invoke('browser:back'),
   forward: () => ipcRenderer.invoke('browser:forward'),

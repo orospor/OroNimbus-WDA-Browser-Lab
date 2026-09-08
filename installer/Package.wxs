@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="OroNimbus WDA Browser Lab"
+    Manufacturer="OroSpor"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="$(var.PackageUpgradeCode)"
+    Language="1033"
+    Scope="perUser"
+    InstallerVersion="500"
+    Compressed="yes">
+
+    <SummaryInformation
+      Description="OroResea controller and OroNimbus Windows Display Affinity browser lab"
+      Manufacturer="OroSpor" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of OroNimbus WDA Browser Lab is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Icon Id="OroNimbusAppIcon" SourceFile="$(var.SourceRoot)\OroWdaLauncher.exe" />
+    <Property Id="ARPPRODUCTICON" Value="OroNimbusAppIcon" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="OroSporFolder" Name="OroSpor">
+          <Directory Id="INSTALLFOLDER" Name="OroNimbus-WDA-Browser-Lab" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="LauncherFiles" Directory="INSTALLFOLDER">
+      <Component Id="LauncherExecutable" Guid="$(var.LauncherComponentGuid)">
+        <File
+          Id="LauncherExecutableFile"
+          Source="$(var.SourceRoot)\OroWdaLauncher.exe"
+          Name="OroWdaLauncher.exe"
+          KeyPath="yes">
+          <Shortcut
+            Id="StartMenuShortcut"
+            Directory="ProgramMenuFolder"
+            Name="OroNimbus WDA Browser Lab"
+            Description="Open the OroResea controller for the OroNimbus WDA browser lab"
+            Advertise="yes"
+            WorkingDirectory="INSTALLFOLDER" />
+        </File>
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="MainFeature" Title="OroNimbus WDA Browser Lab" Level="1">
+      <ComponentGroupRef Id="LauncherFiles" />
+      <ComponentGroupRef Id="PayloadFiles" />
+    </Feature>
+  </Package>
+</Wix>
