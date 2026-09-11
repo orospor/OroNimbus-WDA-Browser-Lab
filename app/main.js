@@ -3,24 +3,57 @@ const startFullscreen = process.argv.includes('--fullscreen');
 const watchdogEnabled = process.argv.includes('--watchdog');
 const dllSearchHardeningRequested = process.argv.includes('--harden-dll-search');
 const moduleMonitorEnabled = process.argv.includes('--module-monitor');
+const cigRequested = process.argv.includes('--cig');
+const processTopologyEnabled = process.argv.includes('--process-topology');
 let nativeBridge;
 
+function nativeAssetPath(fileName) {
+  const nativeDirectory = path.basename(__dirname).toLowerCase() === 'app.asar'
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'native')
+    : path.join(__dirname, 'native');
+  return path.join(nativeDirectory, fileName);
+}
+
 function loadNativeBridge() {
-  nativeBridge ??= require(path.join(__dirname, 'native', 'wda_native.node'));
+  nativeBridge ??= require(nativeAssetPath('wda_native.node'));
   return nativeBridge;
 }
 
 let earlyDllSearchHardening = null;
-if (dllSearchHardeningRequested) {
+let earlyCig = null;
+if (dllSearchHardeningRequested || cigRequested) {
   try {
-    // Run before loading Electron's JavaScript API. The Electron executable and
-    // this native addon are necessarily already loaded, so this fixture protects
-    // subsequent DLL searches rather than claiming pre-bootstrap coverage.
-    earlyDllSearchHardening = loadNativeBridge().hardenDllSearch();
+    const bridge = loadNativeBridge();
+    if (dllSearchHardeningRequested) {
+      // Run before loading Electron's JavaScript API. The Electron executable and
+      // this native addon are necessarily already loaded, so this fixture protects
+      // subsequent DLL searches rather than claiming pre-bootstrap coverage.
+      earlyDllSearchHardening = bridge.hardenDllSearch();
+    }
+    if (cigRequested) {
+      // This is real process-local CIG, but deliberately post-bootstrap: a strict
+      // creation-time Microsoft-only policy would block the unsigned Electron
+      // runtime and native addon before a usable WDA lab could exist.
+      earlyCig = bridge.enableCig();
+    }
   } catch (error) {
-    earlyDllSearchHardening = {
-      error: error instanceof Error ? error.message : String(error),
-    };
+    const message = error instanceof Error ? error.message : String(error);
+    if (dllSearchHardeningRequested && !earlyDllSearchHardening) {
+      earlyDllSearchHardening = { error: message };
+    }
+    if (cigRequested && !earlyCig) {
+      earlyCig = {
+        requested: true,
+        setAttempted: false,
+        setOk: false,
+        getOk: false,
+        effective: false,
+        error: message,
+        timing: 'post-electron-executable-bootstrap',
+        scope: 'electron-main-wda-owner-only',
+        irreversibleForProcess: true,
+      };
+    }
   }
 }
 
@@ -31,6 +64,9 @@ const {
   ipcMain,
   shell,
 } = require('electron');
+
+// Make Chromium sandboxing explicit for every renderer spawned by this lab.
+app.enableSandbox();
 
 const WDA = Object.freeze({
   none: 0x00,
@@ -45,9 +81,12 @@ const requestedMode = (() => {
 })();
 const WATCHDOG_INTERVAL_MS = 3000;
 const MODULE_MONITOR_INTERVAL_MS = 2000;
+const PROCESS_TOPOLOGY_INTERVAL_MS = 1500;
 const MAX_MODULE_EVENTS = 20;
+const MAX_PROCESS_EVENTS = 20;
 const BASE_TOOLBAR_HEIGHT = 106;
 const MODULE_PANEL_HEIGHT = 190;
+const PROCESS_PANEL_HEIGHT = 250;
 const allowedProtocols = new Set(['http:', 'https:']);
 
 // Keep remote debugging off by default. The explicit switch is honored only for
@@ -62,8 +101,13 @@ let mainWindow;
 let browserSurface;
 let watchdogTimer;
 let moduleMonitorTimer;
+let processTopologyTimer;
 let modulePanelOpen = false;
+let processPanelOpen = false;
 const knownModulePaths = new Set();
+const processEvents = [];
+const knownRendererPids = new Map();
+let cachedCigProbe = null;
 let protectionState = {
   launchMode: requestedMode,
   requestedMode,
@@ -89,6 +133,12 @@ let protectionState = {
   watchdogLastError: null,
   dllSearchHardeningRequested,
   dllSearchHardening: earlyDllSearchHardening,
+  cigRequested,
+  cig: earlyCig,
+  cigProbe: null,
+  cigScope: 'electron-main-wda-owner-only',
+  cigTiming: 'post-electron-executable-bootstrap',
+  cigCanDisableLive: false,
   runtimeModeChanges: 0,
   lastModeChangeAt: null,
   moduleMonitorEnabled,
@@ -108,11 +158,27 @@ let protectionState = {
   moduleLastScanAt: null,
   moduleLastError: null,
   moduleRecentEvents: [],
+  processTopologyEnabled,
+  processTopologyScope: 'oronimbus-electron-tree',
+  processTopologyIntervalMs: processTopologyEnabled
+    ? PROCESS_TOPOLOGY_INTERVAL_MS
+    : null,
+  processTopologyLastScanAt: null,
+  processTopologyLastError: null,
+  processTopologyCount: 0,
+  processTopologyRoles: {},
+  processTopologyProcesses: [],
+  processTopologyEvents: [],
 };
 
 function send(channel, value) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, value);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const contents = mainWindow.webContents;
+  if (contents.isDestroyed()) return;
+  try {
+    contents.send(channel, value);
+  } catch (error) {
+    console.warn('[OroNimbus IPC send]', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -121,8 +187,17 @@ function updateWindowTitle() {
   const titleState = protectionState.error
     ? `ERROR: ${protectionState.error}`
     : `${protectionState.matchesRequested ? 'MATCH' : 'DRIFT'} / read 0x${Number(protectionState.readback ?? 0).toString(16)}`;
+  const signaturePolicyEffective = Boolean(
+    protectionState.cig?.getOk && protectionState.cig?.signaturePolicyEffective,
+  );
+  const microsoftPolicyEffective = Boolean(
+    protectionState.cig?.getOk && protectionState.cig?.microsoftSignedOnlyEffective,
+  );
+  const cigState = cigRequested
+    ? (microsoftPolicyEffective ? 'CIG MS ON' : (signaturePolicyEffective ? 'CIG OTHER POLICY' : 'CIG FAILED'))
+    : (signaturePolicyEffective ? 'CIG PRE-EXISTING' : 'CIG OFF');
   const windowMode = mainWindow.isFullScreen() ? 'FULLSCREEN' : 'WINDOWED';
-  mainWindow.setTitle(`OroNimbus — ${protectionState.requestedMode.toUpperCase()} — ${windowMode} — ${titleState}`);
+  mainWindow.setTitle(`OroNimbus — ${process.arch} — ${protectionState.requestedMode.toUpperCase()} — ${cigState} — ${windowMode} — ${titleState}`);
 }
 
 function sendFullscreenState() {
@@ -149,7 +224,8 @@ function layoutBrowserSurface() {
   if (!mainWindow || !browserSurface) return;
   const bounds = mainWindow.getContentBounds();
   const toolbarHeight = BASE_TOOLBAR_HEIGHT
-    + (modulePanelOpen ? MODULE_PANEL_HEIGHT : 0);
+    + (modulePanelOpen ? MODULE_PANEL_HEIGHT : 0)
+    + (processPanelOpen ? PROCESS_PANEL_HEIGHT : 0);
   browserSurface.setBounds({
     x: 0,
     y: toolbarHeight,
@@ -157,6 +233,174 @@ function layoutBrowserSurface() {
     height: Math.max(1, bounds.height - toolbarHeight),
   });
 }
+
+function refreshCigReadback({ runProbe = false } = {}) {
+  try {
+    const bridge = loadNativeBridge();
+    const inspected = bridge.inspectCig();
+    if (runProbe && !cachedCigProbe) {
+      try {
+        cachedCigProbe = bridge.probeImageLoad();
+      } catch (error) {
+        cachedCigProbe = {
+          attempted: false,
+          loaded: false,
+          blockedByCodeIntegrity: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    protectionState = {
+      ...protectionState,
+      cig: {
+        ...inspected,
+        requested: cigRequested,
+        setAttempted: earlyCig?.setAttempted ?? false,
+        setOk: earlyCig?.setOk ?? false,
+        setLastError: earlyCig?.setLastError ?? null,
+        beforeFlags: earlyCig?.beforeFlags ?? inspected.beforeFlags,
+        preexisting: earlyCig?.preexisting ?? inspected.preexisting,
+        timing: earlyCig?.timing ?? 'inspection-only',
+        scope: 'electron-main-wda-owner-only',
+        irreversibleForProcess: true,
+        error: earlyCig?.error ?? null,
+      },
+      cigProbe: cachedCigProbe,
+    };
+  } catch (error) {
+    protectionState = {
+      ...protectionState,
+      cig: {
+        ...(protectionState.cig ?? {}),
+        requested: cigRequested,
+        getOk: false,
+        effective: false,
+        error: error instanceof Error ? error.message : String(error),
+        timing: 'post-electron-executable-bootstrap',
+        scope: 'electron-main-wda-owner-only',
+        irreversibleForProcess: true,
+      },
+      cigProbe: cachedCigProbe,
+    };
+  }
+  return protectionState.cig;
+}
+
+function recordProcessEvent(event) {
+  processEvents.unshift({
+    observedAt: new Date().toISOString(),
+    ...event,
+  });
+  processEvents.splice(MAX_PROCESS_EVENTS);
+}
+
+function processRole(metric, uiRendererPid, contentRendererPid) {
+  if (metric.pid === process.pid) return 'Main / WDA window owner';
+  if (metric.pid === uiRendererPid) return 'Lab UI renderer';
+  if (metric.pid === contentRendererPid) return 'Web-content renderer';
+  if (metric.type === 'GPU') return 'GPU compositor';
+  if (metric.type === 'Utility') {
+    return metric.name || metric.serviceName || 'Chromium utility service';
+  }
+  if (metric.type === 'Tab') return 'Renderer';
+  return metric.name || metric.serviceName || metric.type || 'Unknown';
+}
+
+function sampleProcessTopology() {
+  try {
+    const uiRendererPid = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow.webContents.getOSProcessId()
+      : null;
+    const contentRendererPid = browserSurface && !browserSurface.webContents.isDestroyed()
+      ? browserSurface.webContents.getOSProcessId()
+      : null;
+    if (uiRendererPid > 0 && mainWindow && !mainWindow.isDestroyed()) {
+      knownRendererPids.set(mainWindow.webContents.id, uiRendererPid);
+    }
+    if (contentRendererPid > 0 && browserSurface && !browserSurface.webContents.isDestroyed()) {
+      knownRendererPids.set(browserSurface.webContents.id, contentRendererPid);
+    }
+    const metrics = app.getAppMetrics();
+    const roles = {};
+    const processes = metrics
+      .map((metric) => {
+        const role = processRole(metric, uiRendererPid, contentRendererPid);
+        roles[metric.type] = (roles[metric.type] ?? 0) + 1;
+        return {
+          pid: metric.pid,
+          creationTime: metric.creationTime,
+          type: metric.type,
+          role,
+          serviceName: metric.serviceName ?? null,
+          name: metric.name ?? null,
+          sandboxed: metric.sandboxed ?? null,
+          integrityLevel: metric.integrityLevel ?? null,
+          cpuPercent: Number(metric.cpu?.percentCPUUsage ?? 0),
+          workingSetKb: Number(metric.memory?.workingSetSize ?? 0),
+          wdaOwner: metric.pid === process.pid,
+        };
+      })
+      .sort((left, right) => (
+        Number(right.wdaOwner) - Number(left.wdaOwner)
+          || left.type.localeCompare(right.type)
+          || left.pid - right.pid
+      ));
+
+    protectionState = {
+      ...protectionState,
+      processTopologyLastScanAt: new Date().toISOString(),
+      processTopologyLastError: null,
+      processTopologyCount: processes.length,
+      processTopologyRoles: roles,
+      processTopologyProcesses: processes,
+      processTopologyEvents: [...processEvents],
+    };
+  } catch (error) {
+    protectionState = {
+      ...protectionState,
+      processTopologyLastScanAt: new Date().toISOString(),
+      processTopologyLastError: error instanceof Error ? error.message : String(error),
+      processTopologyEvents: [...processEvents],
+    };
+  }
+  send('lab:state', protectionState);
+  return protectionState;
+}
+
+function startProcessTopology() {
+  if (!processTopologyEnabled || processTopologyTimer) return;
+  sampleProcessTopology();
+  processTopologyTimer = setInterval(
+    sampleProcessTopology,
+    PROCESS_TOPOLOGY_INTERVAL_MS,
+  );
+}
+
+app.on('render-process-gone', (_event, contents, details) => {
+  const cachedPid = knownRendererPids.get(contents.id) ?? null;
+  knownRendererPids.delete(contents.id);
+  recordProcessEvent({
+    kind: 'renderer-exit',
+    pid: cachedPid,
+    webContentsId: contents.id,
+    reason: details.reason,
+    exitCode: details.exitCode,
+  });
+  if (processTopologyEnabled) sampleProcessTopology();
+});
+
+app.on('child-process-gone', (_event, details) => {
+  recordProcessEvent({
+    kind: 'child-exit',
+    pid: null,
+    type: details.type,
+    name: details.name,
+    serviceName: details.serviceName,
+    reason: details.reason,
+    exitCode: details.exitCode,
+  });
+  if (processTopologyEnabled) sampleProcessTopology();
+});
 
 function applyRequestedAffinity() {
   try {
@@ -187,6 +431,7 @@ function applyRequestedAffinity() {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+  refreshCigReadback({ runProbe: cigRequested });
   updateWindowTitle();
   console.log('[OroNimbus WDA]', JSON.stringify(protectionState));
   send('lab:state', protectionState);
@@ -432,6 +677,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
     },
   });
 
@@ -440,6 +688,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
       partition: 'persist:oronimbus-lab',
     },
   });
@@ -491,6 +742,10 @@ function createWindow() {
       clearInterval(moduleMonitorTimer);
       moduleMonitorTimer = null;
     }
+    if (processTopologyTimer) {
+      clearInterval(processTopologyTimer);
+      processTopologyTimer = null;
+    }
     browserSurface?.webContents.close();
     browserSurface = null;
     mainWindow = null;
@@ -501,6 +756,7 @@ function createWindow() {
       applyRequestedAffinity();
       startAffinityWatchdog();
       startModuleMonitor();
+      startProcessTopology();
     }, 100);
   });
 
@@ -508,11 +764,28 @@ function createWindow() {
   browserSurface.webContents.loadURL('https://example.com');
 }
 
-ipcMain.handle('lab:get-state', () => ({
+function assertTrustedSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error('OroNimbus toolbar is not available');
+  }
+  const trustedContents = mainWindow.webContents;
+  if (event.sender !== trustedContents || event.senderFrame !== trustedContents.mainFrame) {
+    throw new Error('Rejected IPC from an untrusted renderer');
+  }
+}
+
+function handleTrusted(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedSender(event);
+    return handler(...args);
+  });
+}
+
+handleTrusted('lab:get-state', () => ({
   ...protectionState,
   fullscreen: Boolean(mainWindow?.isFullScreen()),
 }));
-ipcMain.handle('lab:inspect', () => {
+handleTrusted('lab:inspect', () => {
   try {
     const result = loadNativeBridge().inspect(mainWindow.getNativeWindowHandle());
     protectionState = {
@@ -533,7 +806,13 @@ ipcMain.handle('lab:inspect', () => {
   send('lab:state', protectionState);
   return protectionState;
 });
-ipcMain.handle('lab:clear-affinity', () => {
+handleTrusted('lab:inspect-cig', () => {
+  refreshCigReadback({ runProbe: true });
+  updateWindowTitle();
+  send('lab:state', protectionState);
+  return protectionState;
+});
+handleTrusted('lab:clear-affinity', () => {
   try {
     const result = loadNativeBridge().apply(mainWindow.getNativeWindowHandle(), WDA.none);
     protectionState = {
@@ -557,39 +836,45 @@ ipcMain.handle('lab:clear-affinity', () => {
   send('lab:state', protectionState);
   return protectionState;
 });
-ipcMain.handle('lab:set-affinity-mode', (_event, mode) => setAffinityMode(mode));
-ipcMain.handle('lab:scan-modules', () => scanOwnModules({
+handleTrusted('lab:set-affinity-mode', (mode) => setAffinityMode(mode));
+handleTrusted('lab:scan-modules', () => scanOwnModules({
   establishBaseline: !protectionState.moduleBaselineReady,
 }));
-ipcMain.handle('lab:set-module-panel-open', (_event, open) => {
+handleTrusted('lab:set-module-panel-open', (open) => {
   modulePanelOpen = Boolean(open);
   layoutBrowserSurface();
   return modulePanelOpen;
 });
-ipcMain.handle('browser:navigate', (_event, value) => {
+handleTrusted('lab:scan-processes', () => sampleProcessTopology());
+handleTrusted('lab:set-process-panel-open', (open) => {
+  processPanelOpen = Boolean(open);
+  layoutBrowserSurface();
+  return processPanelOpen;
+});
+handleTrusted('browser:navigate', (value) => {
   const url = normalizeLocation(value);
   browserSurface.webContents.loadURL(url);
   return url;
 });
-ipcMain.handle('browser:back', () => {
+handleTrusted('browser:back', () => {
   if (browserSurface.webContents.navigationHistory.canGoBack()) {
     browserSurface.webContents.navigationHistory.goBack();
   }
 });
-ipcMain.handle('browser:forward', () => {
+handleTrusted('browser:forward', () => {
   if (browserSurface.webContents.navigationHistory.canGoForward()) {
     browserSurface.webContents.navigationHistory.goForward();
   }
 });
-ipcMain.handle('browser:reload', () => browserSurface.webContents.reload());
-ipcMain.handle('browser:external', (_event, url) => shell.openExternal(normalizeLocation(url)));
-ipcMain.handle('window:toggle-fullscreen', () => {
+handleTrusted('browser:reload', () => browserSurface.webContents.reload());
+handleTrusted('browser:external', (url) => shell.openExternal(normalizeLocation(url)));
+handleTrusted('window:toggle-fullscreen', () => {
   const fullscreen = !mainWindow.isFullScreen();
   mainWindow.setFullScreen(fullscreen);
   sendFullscreenState();
   return fullscreen;
 });
-ipcMain.handle('window:exit', () => {
+handleTrusted('window:exit', () => {
   setImmediate(() => mainWindow?.close());
   return true;
 });

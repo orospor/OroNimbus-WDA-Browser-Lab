@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="OroNimbus WDA Browser Lab x86 Companion"
+    Manufacturer="OroSpor"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="$(var.PackageUpgradeCode)"
+    Language="1033"
+    Scope="perUser"
+    InstallerVersion="500"
+    Compressed="yes">
+
+    <SummaryInformation
+      Description="Shared 32-bit OroNimbus browser runtime"
+      Manufacturer="OroSpor" />
+    <MajorUpgrade DowngradeErrorMessage="A newer x86 companion for OroNimbus WDA Browser Lab is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPSYSTEMCOMPONENT" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="OroSporFolder" Name="OroSpor">
+          <Directory Id="INSTALLFOLDER" Name="OroNimbus-WDA-Browser-Lab" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="OroNimbus 32-bit browser runtime" Level="1">
+      <ComponentGroupRef Id="PayloadFiles" />
+    </Feature>
+  </Package>
+</Wix>

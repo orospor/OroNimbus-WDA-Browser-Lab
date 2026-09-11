@@ -1,6 +1,6 @@
 # Defense evidence and fixture mapping
 
-This note records the evidence boundary used for OroNimbus `v0.4.0`. The source folders contained decompiled text, not original executable files, and nothing from them was executed. Line numbers refer to those supplied decompilations. No third-party implementation code is copied into this lab.
+This note records the evidence boundary used for OroNimbus `v0.5.0`. The source folders contained decompiled text, not original executable files, and nothing from them was executed. Line numbers refer to those supplied decompilations. No third-party implementation code is copied into this lab.
 
 | Recovered evidence | Classification | OroNimbus fixture |
 | --- | --- | --- |
@@ -12,7 +12,7 @@ This note records the evidence boundary used for OroNimbus `v0.4.0`. The source 
 | `cpbrowser.exe.decompiled.cs:897-910` and related startup paths call `SetDefaultDllDirectories(0x800)` plus `SetDllDirectory("")`. | Recovered active startup hardening against legacy DLL search-order abuse. | Optional `--harden-dll-search` applies the same API policy before the Electron JavaScript API loads and reports both results. The Electron executable and addon must load first, so the browser fixture explicitly has a bootstrap gap; the launcher applies it at entry. |
 | The package code performs MD5 file checks and redeployment; certificate serial checks do not call `WinVerifyTrust`/`SignedCms.CheckSignature` and failures are telemetry-only. | Integrity behavior exists, but the recovered certificate logic is not trustworthy signature enforcement. | Not reproduced in this WDA-focused release. A future trust fixture should use SHA-256 and `WinVerifyTrust`, not copied serials. |
 
-## v0.4.0 lab instrumentation, not recovered evidence
+## v0.5.0 lab instrumentation, not recovered evidence
 
 The live WDA selector is a lab usability feature. It changes only OroNimbus's own top-level window between NONE, MONITOR, and EXCLUDE while the browser is running, and updates the watchdog's requested value. Its presence does not imply that the examined product exposed or used an equivalent live selector.
 
@@ -20,8 +20,18 @@ The native module-load monitor is also lab-only instrumentation. It periodically
 
 This heuristic cannot prove injection or identify the actor that caused a load. It does not observe renderer, GPU, utility, or other child processes; manual-mapped images; shellcode or other memory-only modifications; modules that load and unload between scans; data-file loads absent from the executable loader list; or attempts blocked before a module became visible. A first-seen or other-path entry is an investigation lead only and may be entirely legitimate.
 
+The x86 selector and live process-topology panel are likewise lab-only. The x86 selection launches a separate PE32 `OroNimbus.exe` and matching native addon; it does not make the native x64 or ARM64 image appear 32-bit. The topology panel reports the dynamic Chromium main, renderer, GPU, and utility roles observed at runtime. The same executable name appearing several times is normal Chromium process isolation, not a fixed seven-process defense and not multiple WDA owners. Only the Electron main PID owns the protected top-level window, and the module monitor remains restricted to that PID.
+
+The `--cig` option is a new compatibility fixture, not recovered ETS behavior. It calls `SetProcessMitigationPolicy` with `ProcessSignaturePolicy/MicrosoftSignedOnly` in the OroNimbus main/WDA-owner process and verifies the result with `GetProcessMitigationPolicy`. The addon exposes the requested state, setter result, Windows readback, raw flags, timing, scope, and whether the policy was already present. CIG is irreversible for that process, so returning to the unprotected baseline requires a relaunch.
+
+The package includes a never-preloaded unsigned control image, `cig_probe_unsigned.node`. In the no-CIG baseline it must load and be freed; after CIG becomes effective, the same future image mapping must fail with `ERROR_INVALID_IMAGE_HASH` (`577`). This is lab-owned enforcement evidence, not a claim about ETS or protection against memory-only techniques.
+
+The CIG timing boundary is explicit. Electron's executable and the lab's native addon must already be loaded before the addon can request the policy, so it governs future image mappings in the main PID rather than providing strict creation-time coverage. It neither retroactively validates existing images nor establishes CIG on Chromium child PIDs, and CIG alone is not a complete defense against manual-mapped or memory-only code. Strict creation-time Microsoft-only CIG is incompatible with the current unsigned Electron executable, addon, and runtime DLL payload and is therefore documented as a negative compatibility result rather than exposed as a working WDA browser mode.
+
+`app.enableSandbox()` plus explicit sandboxed, context-isolated renderer preferences are v0.5.0 lab hardening. All privileged IPC handlers additionally require the trusted top-level toolbar renderer and its main frame, so embedded web content cannot directly invoke them. The topology view observes those separate Chromium roles; it does not claim that sandboxing, CIG, WDA, or the module heuristic are equivalent controls.
+
 ## Negative findings
 
-No supplied call path established active `SetProcessMitigationPolicy`, PPL, CIG, ACG, CET, WDAC, or product-specific injection detection. Native CFG-related strings alone are not proof of a runtime enforcement policy. The lab therefore does not report those controls as present, and the `v0.4.0` self-module heuristic does not change that negative finding.
+No supplied ETS call path established active `SetProcessMitigationPolicy`, PPL, CIG, ACG, CET, WDAC, or product-specific injection detection. Native CFG-related strings alone are not proof of a runtime enforcement policy. That negative finding is unchanged by the `v0.5.0` self-module heuristic, x86 companion, process-topology view, explicit renderer sandboxing, or opt-in CIG fixture. A successful OroNimbus CIG readback proves only the state of the lab-owned main PID; it is not evidence that ETS employs CIG.
 
 The supplied material also contains global input hooks, process termination, taskbar/window suppression, and screen blanking. Those mechanisms are intrusive proctoring controls rather than capture-defense evidence and are intentionally excluded.

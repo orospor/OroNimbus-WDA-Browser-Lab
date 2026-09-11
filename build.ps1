@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("arm64", "x64")]
+    [ValidateSet("ia32", "arm64", "x64")]
     [string] $Architecture = "arm64"
 )
 
@@ -8,10 +8,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$rustTarget = if ($Architecture -eq "arm64") {
-    "aarch64-pc-windows-msvc"
-} else {
-    "x86_64-pc-windows-msvc"
+$rustTarget = switch ($Architecture) {
+    "ia32" { "i686-pc-windows-msvc" }
+    "arm64" { "aarch64-pc-windows-msvc" }
+    "x64" { "x86_64-pc-windows-msvc" }
 }
 
 function Assert-Success([string] $Operation) {

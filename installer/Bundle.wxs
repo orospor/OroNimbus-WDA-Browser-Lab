@@ -41,6 +41,13 @@
         Compressed="yes"
         Visible="no"
         Vital="yes" />
+      <MsiPackage
+        Id="OroNimbusIa32Companion"
+        SourceFile="$(var.Ia32Msi)"
+        InstallCondition="NativeMachine = 34404 OR NativeMachine = 43620"
+        Compressed="yes"
+        Visible="no"
+        Vital="yes" />
     </Chain>
   </Bundle>
 </Wix>

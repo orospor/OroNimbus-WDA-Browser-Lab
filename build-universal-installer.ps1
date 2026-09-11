@@ -95,13 +95,25 @@ function Get-RelativePath([string] $BasePath, [string] $TargetPath) {
     return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', '\')
 }
 
-function Write-PayloadFragment([string] $SourceRoot, [string] $DestinationPath) {
+function Write-PayloadFragment(
+    [string] $SourceRoot,
+    [string] $DestinationPath,
+    [string] $DestinationSubdirectory = ''
+) {
     $componentIds = [System.Collections.Generic.List[string]]::new()
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add('<?xml version="1.0" encoding="utf-8"?>')
     $lines.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
     $lines.Add('  <Fragment>')
     $lines.Add('    <DirectoryRef Id="INSTALLFOLDER">')
+
+    $payloadIndent = 6
+    if (-not [string]::IsNullOrWhiteSpace($DestinationSubdirectory)) {
+        $destinationDirectoryId = Get-StableWixId 'D' "install/$DestinationSubdirectory"
+        $destinationDirectoryName = ConvertTo-WixAttribute $DestinationSubdirectory
+        $lines.Add("      <Directory Id=`"$destinationDirectoryId`" Name=`"$destinationDirectoryName`">")
+        $payloadIndent = 8
+    }
 
     function Add-PayloadDirectory([string] $DirectoryPath, [string] $RelativeDirectory, [int] $IndentLevel) {
         $contentIndent = ' ' * $IndentLevel
@@ -140,7 +152,10 @@ function Write-PayloadFragment([string] $SourceRoot, [string] $DestinationPath) 
         }
     }
 
-    Add-PayloadDirectory $SourceRoot '' 6
+    Add-PayloadDirectory $SourceRoot '' $payloadIndent
+    if (-not [string]::IsNullOrWhiteSpace($DestinationSubdirectory)) {
+        $lines.Add('      </Directory>')
+    }
     $lines.Add('    </DirectoryRef>')
     $lines.Add('  </Fragment>')
     $lines.Add('  <Fragment>')
@@ -185,12 +200,19 @@ function Assert-FullBrowserPayload(
     Assert-PeMachine (Join-Path $SourceRoot 'OroNimbus\resources\app.asar.unpacked\native\wda_native.node') $ExpectedMachine $Architecture
 
     $fileCount = @(Get-ChildItem -LiteralPath $SourceRoot -Recurse -File).Count
-    if ($fileCount -lt 80) {
-        throw "$Architecture bundle has only $fileCount files; the complete v$Version payload has at least 80."
+    # The official ia32 Electron package omits two shader-compiler files that
+    # are present in the 64-bit distributions.
+    $minimumFileCount = if ($Architecture -eq 'ia32') { 78 } else { 80 }
+    if ($fileCount -lt $minimumFileCount) {
+        throw "$Architecture bundle has only $fileCount files; the complete v$Version $Architecture payload has at least $minimumFileCount."
     }
 
     $payloadBytes = (Get-ChildItem -LiteralPath $SourceRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum
-    if ($payloadBytes -lt 350MB) {
+    # Electron's complete Windows ia32 distribution is smaller than its x64 and
+    # ARM64 counterparts. Required-file and PE-machine checks above remain the
+    # authoritative completeness checks; this floor only catches partial copies.
+    $minimumPayloadBytes = if ($Architecture -eq 'ia32') { 275MB } else { 350MB }
+    if ($payloadBytes -lt $minimumPayloadBytes) {
         throw "$Architecture bundle is unexpectedly small ($payloadBytes bytes); refusing to build a partial browser installer."
     }
 }
@@ -243,9 +265,14 @@ $payloads = @{
         PackageUpgradeCode = '{AD85ACD7-66DF-4B56-BA33-2678EFEB358C}'
         LauncherComponentGuid = '{EEE20761-A7A0-40D7-8F02-54F3878C5470}'
     }
+    ia32 = [pscustomobject]@{
+        SourceRoot = Join-Path $artifactsRoot "OroNimbus-WDA-Browser-Lab-v$Version-win-ia32"
+        Machine = [uint16] 0x014C
+        PackageUpgradeCode = '{DD2F0B46-2D24-48F1-AE47-D60C8AB376F1}'
+    }
 }
 
-foreach ($architecture in @('x64', 'arm64')) {
+foreach ($architecture in @('x64', 'arm64', 'ia32')) {
     Assert-FullBrowserPayload $payloads[$architecture].SourceRoot $payloads[$architecture].Machine $architecture
 }
 
@@ -278,6 +305,29 @@ foreach ($architecture in @('x64', 'arm64')) {
     $builtPackages[$architecture] = $msiPath
 }
 
+$ia32Payload = $payloads['ia32']
+$ia32MsiPath = Join-Path $packageRoot "OroNimbus-WDA-Browser-Lab-v$Version-ia32-companion.msi"
+$ia32IntermediatePath = Join-Path $intermediateRoot 'ia32'
+New-Item -ItemType Directory -Path $ia32IntermediatePath -Force | Out-Null
+$ia32PayloadFragment = Join-Path $ia32IntermediatePath 'PayloadFiles.wxs'
+Write-PayloadFragment `
+    -SourceRoot (Join-Path $ia32Payload.SourceRoot 'OroNimbus') `
+    -DestinationPath $ia32PayloadFragment `
+    -DestinationSubdirectory 'OroNimbus-x86'
+
+$ia32PackageArguments = @(
+    'build', (Join-Path $installerRoot 'X86CompanionPackage.wxs'), $ia32PayloadFragment,
+    '-arch', 'x86',
+    '-d', "ProductVersion=$Version",
+    '-d', "PackageUpgradeCode=$($ia32Payload.PackageUpgradeCode)",
+    '-intermediatefolder', $ia32IntermediatePath,
+    '-pdbtype', 'none',
+    '-out', $ia32MsiPath
+)
+& $WixPath @ia32PackageArguments
+Assert-LastCommand 'Building the shared x86 browser companion MSI'
+$builtPackages['ia32'] = $ia32MsiPath
+
 $setupName = "OroNimbus-WDA-Browser-Lab-v$Version-Setup-universal.exe"
 $setupPath = Join-Path $releaseRoot $setupName
 $bundleIntermediate = Join-Path $intermediateRoot 'bundle'
@@ -289,6 +339,7 @@ $bundleArguments = @(
     '-d', "ProductVersion=$Version",
     '-d', "X64Msi=$($builtPackages['x64'])",
     '-d', "Arm64Msi=$($builtPackages['arm64'])",
+    '-d', "Ia32Msi=$($builtPackages['ia32'])",
     '-intermediatefolder', $bundleIntermediate,
     '-pdbtype', 'none',
     '-out', $setupPath

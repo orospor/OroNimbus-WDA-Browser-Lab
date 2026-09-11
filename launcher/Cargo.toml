@@ -1,8 +1,8 @@
 [package]
 name = "orowda-launcher"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
-description = "Controller for the OroNimbus Electron WDA browser lab"
+description = "Controller for the OroNimbus WDA, CIG, and process-isolation lab"
 
 [dependencies]
 windows-sys = { version = "0.61.2", features = [

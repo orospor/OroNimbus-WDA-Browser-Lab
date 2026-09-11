@@ -17,7 +17,8 @@
       "msvs_settings": {
         "VCCLCompilerTool": {
           "ExceptionHandling": 0,
-          "DebugInformationFormat": 0
+          "DebugInformationFormat": 0,
+          "RuntimeLibrary": 0
         },
         "VCLinkerTool": {
           "DelayLoadDLLs": ["user32.dll"],

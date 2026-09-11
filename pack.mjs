@@ -5,7 +5,7 @@ import { packager } from '@electron/packager';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const arch = process.argv[2] ?? process.arch;
-const supported = new Set(['arm64', 'x64']);
+const supported = new Set(['ia32', 'arm64', 'x64']);
 if (!supported.has(arch)) {
   throw new Error(`Unsupported target architecture: ${arch}`);
 }
@@ -17,6 +17,10 @@ if (!fs.existsSync(addonSource)) {
 }
 fs.mkdirSync(addonDirectory, { recursive: true });
 fs.copyFileSync(addonSource, path.join(addonDirectory, 'wda_native.node'));
+// A byte-identical copy with a distinct path is never required as an addon. It
+// exists only so the running lab can prove that CIG rejects a new unsigned image
+// load after policy activation; without CIG the same load must succeed and free.
+fs.copyFileSync(addonSource, path.join(addonDirectory, 'cig_probe_unsigned.node'));
 
 const output = path.join(root, 'dist');
 await packager({

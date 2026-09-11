@@ -2,6 +2,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
     path::PathBuf,
     process::Command,
     ptr,
@@ -30,6 +32,9 @@ const ID_FULLSCREEN: usize = 1105;
 const ID_WATCHDOG: usize = 1106;
 const ID_HARDEN_DLL_SEARCH: usize = 1107;
 const ID_MODULE_MONITOR: usize = 1108;
+const ID_X86_BROWSER: usize = 1109;
+const ID_CIG: usize = 1110;
+const ID_PROCESS_TOPOLOGY: usize = 1111;
 const BST_CHECKED_VALUE: u32 = 1;
 
 static STATUS_HANDLE: AtomicIsize = AtomicIsize::new(0);
@@ -59,7 +64,7 @@ fn main() {
             return;
         }
 
-        let title = wide("OroResea Browser WDA Lab — OroNimbus controller");
+        let title = wide("OroNimbus WDA / CIG / process-isolation lab");
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(),
@@ -68,7 +73,7 @@ fn main() {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             820,
-            635,
+            720,
             ptr::null_mut(),
             ptr::null_mut(),
             instance,
@@ -127,7 +132,7 @@ unsafe fn create_controls(
         hwnd,
         instance,
         "STATIC",
-        "The controller never protects itself. Each button starts OroNimbus.exe, and the Electron main process applies and reads WDA on its own BrowserWindow through a delay-loaded native module.",
+        "The controller never protects itself. Choose native or true 32-bit x86 OroNimbus, combine WDA with opt-in process-local CIG, and observe the real Chromium process tree.",
         WS_CHILD | WS_VISIBLE,
         24,
         62,
@@ -183,6 +188,18 @@ unsafe fn create_controls(
         40,
         ID_FOLDER,
     );
+    let x86_browser = create_child(
+        hwnd,
+        instance,
+        "BUTTON",
+        "Launch the 32-bit x86 browser payload (unchecked = native 64-bit payload)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
+        24,
+        244,
+        730,
+        28,
+        ID_X86_BROWSER,
+    );
     let fullscreen = create_child(
         hwnd,
         instance,
@@ -190,7 +207,7 @@ unsafe fn create_controls(
         "Launch browser in fullscreen (applies to EXCLUDE, MONITOR, and NONE)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
         24,
-        244,
+        278,
         730,
         28,
         ID_FULLSCREEN,
@@ -202,7 +219,7 @@ unsafe fn create_controls(
         "Enable 3-second WDA readback + reapply watchdog (observed MONITOR path)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
         24,
-        278,
+        312,
         730,
         28,
         ID_WATCHDOG,
@@ -214,22 +231,46 @@ unsafe fn create_controls(
         "Apply System32-only DLL search hardening inside OroNimbus main process",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
         24,
-        312,
+        346,
         730,
         28,
         ID_HARDEN_DLL_SEARCH,
+    );
+    let cig = create_child(
+        hwnd,
+        instance,
+        "BUTTON",
+        "Enable CIG MicrosoftSignedOnly after Electron bootstrap (main/WDA owner; restart to disable)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
+        24,
+        380,
+        730,
+        28,
+        ID_CIG,
     );
     let module_monitor = create_child(
         hwnd,
         instance,
         "BUTTON",
-        "Monitor OroNimbus native module loads (heuristic)",
+        "Monitor OroNimbus main-process native module loads (heuristic)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
         24,
-        346,
+        414,
         730,
         28,
         ID_MODULE_MONITOR,
+    );
+    let process_topology = create_child(
+        hwnd,
+        instance,
+        "BUTTON",
+        "Show live Chromium process topology (main, renderer, GPU, and utility roles)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
+        24,
+        448,
+        730,
+        28,
+        ID_PROCESS_TOPOLOGY,
     );
     SendMessageW(watchdog, BM_SETCHECK, BST_CHECKED_VALUE as usize, 0);
     SendMessageW(
@@ -239,8 +280,10 @@ unsafe fn create_controls(
         0,
     );
     SendMessageW(module_monitor, BM_SETCHECK, BST_CHECKED_VALUE as usize, 0);
+    SendMessageW(process_topology, BM_SETCHECK, BST_CHECKED_VALUE as usize, 0);
     let initial_status = format!(
-        "Ready. Process name under test: OroNimbus.exe\r\nLauncher {launcher_hardening_status}"
+        "Ready. Native architecture: {}. Optional x86 payload: OroNimbus-x86\\OroNimbus.exe\r\nLauncher {launcher_hardening_status}",
+        std::env::consts::ARCH
     );
     let status = create_child(
         hwnd,
@@ -249,21 +292,21 @@ unsafe fn create_controls(
         &initial_status,
         WS_CHILD | WS_VISIBLE,
         24,
-        388,
+        490,
         750,
-        64,
+        68,
         0,
     );
     let note = create_child(
         hwnd,
         instance,
         "STATIC",
-        "Recovered path: WDA_MONITOR (0x01) + 3-second readback/reapply watchdog.\r\nEXCLUDE (0x11) remains a separate Electron capability test, not a confirmed recovered product call path.",
+        "Chromium normally runs the same OroNimbus.exe as 5–10 dynamic process roles; this is process isolation, not seven WDA copies.\r\nCIG here is real but post-bootstrap and verified on the main PID only. Child-PID coverage is not claimed, and CIG does not inspect manual-mapped code.",
         WS_CHILD | WS_VISIBLE,
         24,
-        474,
+        574,
         750,
-        64,
+        70,
         0,
     );
     STATUS_HANDLE.store(status as isize, Ordering::Relaxed);
@@ -276,10 +319,13 @@ unsafe fn create_controls(
         monitor,
         none,
         folder,
+        x86_browser,
         fullscreen,
         watchdog,
         harden_dll_search,
+        cig,
         module_monitor,
+        process_topology,
         status,
         note,
     ] {
@@ -328,12 +374,72 @@ fn bundle_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "Launcher has no parent directory".to_owned())
 }
 
-fn browser_path() -> Result<PathBuf, String> {
-    let path = bundle_root()?.join("OroNimbus").join("OroNimbus.exe");
+fn read_pe_machine(path: &PathBuf) -> Result<u16, String> {
+    let mut file =
+        File::open(path).map_err(|error| format!("Cannot open {}: {error}", path.display()))?;
+    let mut dos_signature = [0_u8; 2];
+    file.read_exact(&mut dos_signature)
+        .map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+    if dos_signature != *b"MZ" {
+        return Err(format!("{} is not a Windows PE file", path.display()));
+    }
+    file.seek(SeekFrom::Start(0x3c))
+        .map_err(|error| format!("Cannot seek {}: {error}", path.display()))?;
+    let mut pe_offset_bytes = [0_u8; 4];
+    file.read_exact(&mut pe_offset_bytes)
+        .map_err(|error| format!("Cannot read PE offset from {}: {error}", path.display()))?;
+    let pe_offset = u32::from_le_bytes(pe_offset_bytes) as u64;
+    file.seek(SeekFrom::Start(pe_offset))
+        .map_err(|error| format!("Cannot seek PE header in {}: {error}", path.display()))?;
+    let mut signature = [0_u8; 4];
+    file.read_exact(&mut signature)
+        .map_err(|error| format!("Cannot read PE header from {}: {error}", path.display()))?;
+    if signature != *b"PE\0\0" {
+        return Err(format!("{} has an invalid PE signature", path.display()));
+    }
+    let mut machine_bytes = [0_u8; 2];
+    file.read_exact(&mut machine_bytes)
+        .map_err(|error| format!("Cannot read PE machine from {}: {error}", path.display()))?;
+    Ok(u16::from_le_bytes(machine_bytes))
+}
+
+fn native_machine() -> u16 {
+    if cfg!(target_arch = "aarch64") {
+        0xaa64
+    } else if cfg!(target_arch = "x86") {
+        0x014c
+    } else {
+        0x8664
+    }
+}
+
+fn browser_path(use_x86: bool) -> Result<PathBuf, String> {
+    let root = bundle_root()?;
+    let directory = if use_x86 {
+        "OroNimbus-x86"
+    } else {
+        "OroNimbus"
+    };
+    let mut path = root.join(directory).join("OroNimbus.exe");
+    if use_x86 && !path.is_file() && cfg!(target_arch = "x86") {
+        path = root.join("OroNimbus").join("OroNimbus.exe");
+    }
     if path.is_file() {
+        let expected_machine = if use_x86 { 0x014c } else { native_machine() };
+        let actual_machine = read_pe_machine(&path)?;
+        if actual_machine != expected_machine {
+            return Err(format!(
+                "Architecture mismatch for {}: expected PE machine 0x{expected_machine:04X}, found 0x{actual_machine:04X}",
+                path.display()
+            ));
+        }
         Ok(path)
     } else {
-        Err(format!("OroNimbus.exe was not found at {}", path.display()))
+        Err(format!(
+            "{} browser was not found at {}",
+            if use_x86 { "32-bit x86" } else { "native" },
+            path.display()
+        ))
     }
 }
 
@@ -343,8 +449,11 @@ fn launch_browser(
     watchdog: bool,
     harden_dll_search: bool,
     module_monitor: bool,
+    use_x86: bool,
+    cig: bool,
+    process_topology: bool,
 ) -> Result<u32, String> {
-    let path = browser_path()?;
+    let path = browser_path(use_x86)?;
     let working_directory = path
         .parent()
         .ok_or_else(|| "Invalid OroNimbus path".to_owned())?;
@@ -362,6 +471,12 @@ fn launch_browser(
     if module_monitor {
         command.arg("--module-monitor");
     }
+    if cig {
+        command.arg("--cig");
+    }
+    if process_topology {
+        command.arg("--process-topology");
+    }
     command
         .current_dir(working_directory)
         .spawn()
@@ -369,8 +484,16 @@ fn launch_browser(
         .map_err(|error| format!("Could not launch {}: {error}", path.display()))
 }
 
-fn open_scan_target() -> Result<(), String> {
-    let folder = bundle_root()?.join("OroNimbus");
+fn open_scan_target(use_x86: bool) -> Result<(), String> {
+    let directory = if use_x86 {
+        "OroNimbus-x86"
+    } else {
+        "OroNimbus"
+    };
+    let mut folder = bundle_root()?.join(directory);
+    if use_x86 && !folder.is_dir() && cfg!(target_arch = "x86") {
+        folder = bundle_root()?.join("OroNimbus");
+    }
     if !folder.is_dir() {
         return Err(format!("Scan target was not found at {}", folder.display()));
     }
@@ -410,26 +533,44 @@ unsafe extern "system" fn window_proc(
             let module_monitor = !module_monitor_control.is_null()
                 && SendMessageW(module_monitor_control, BM_GETCHECK, 0, 0) as u32
                     == BST_CHECKED_VALUE;
+            let x86_control = GetDlgItem(hwnd, ID_X86_BROWSER as i32);
+            let use_x86 = !x86_control.is_null()
+                && SendMessageW(x86_control, BM_GETCHECK, 0, 0) as u32 == BST_CHECKED_VALUE;
+            let cig_control = GetDlgItem(hwnd, ID_CIG as i32);
+            let cig = !cig_control.is_null()
+                && SendMessageW(cig_control, BM_GETCHECK, 0, 0) as u32 == BST_CHECKED_VALUE;
+            let process_topology_control = GetDlgItem(hwnd, ID_PROCESS_TOPOLOGY as i32);
+            let process_topology = !process_topology_control.is_null()
+                && SendMessageW(process_topology_control, BM_GETCHECK, 0, 0) as u32
+                    == BST_CHECKED_VALUE;
             let display = if fullscreen { "fullscreen" } else { "windowed" };
-            let defenses = if watchdog || harden_dll_search || module_monitor {
+            let architecture = if use_x86 { "32-bit x86" } else { "native" };
+            let defenses = if watchdog
+                || harden_dll_search
+                || module_monitor
+                || cig
+                || process_topology
+            {
                 format!(
-                    " [watchdog: {}; DLL search: {}; module monitor: {}]",
+                    " [watchdog: {}; DLL search: {}; CIG: {}; module monitor: {}; process map: {}]",
                     if watchdog { "on" } else { "off" },
                     if harden_dll_search {
                         "hardened"
                     } else {
                         "baseline"
                     },
-                    if module_monitor { "on" } else { "off" }
+                    if cig { "requested (late/main)" } else { "off" },
+                    if module_monitor { "on" } else { "off" },
+                    if process_topology { "on" } else { "off" }
                 )
             } else {
                 " [defense fixtures off]".to_owned()
             };
             let action = match wparam & 0xffff {
-                ID_EXCLUDE => launch_browser("exclude", fullscreen, watchdog, harden_dll_search, module_monitor).map(|pid| format!("Launched OroNimbus.exe PID {pid} {display} with requested WDA_EXCLUDEFROMCAPTURE (0x11){defenses}")),
-                ID_MONITOR => launch_browser("monitor", fullscreen, watchdog, harden_dll_search, module_monitor).map(|pid| format!("Launched OroNimbus.exe PID {pid} {display} with requested WDA_MONITOR (0x01){defenses}")),
-                ID_NONE => launch_browser("none", fullscreen, watchdog, harden_dll_search, module_monitor).map(|pid| format!("Launched OroNimbus.exe PID {pid} {display} with requested WDA_NONE (0x00){defenses}")),
-                ID_FOLDER => open_scan_target().map(|_| "Opened the OroNimbus scan-target folder.".to_owned()),
+                ID_EXCLUDE => launch_browser("exclude", fullscreen, watchdog, harden_dll_search, module_monitor, use_x86, cig, process_topology).map(|pid| format!("Launched {architecture} OroNimbus.exe PID {pid} {display} with requested WDA_EXCLUDEFROMCAPTURE (0x11){defenses}")),
+                ID_MONITOR => launch_browser("monitor", fullscreen, watchdog, harden_dll_search, module_monitor, use_x86, cig, process_topology).map(|pid| format!("Launched {architecture} OroNimbus.exe PID {pid} {display} with requested WDA_MONITOR (0x01){defenses}")),
+                ID_NONE => launch_browser("none", fullscreen, watchdog, harden_dll_search, module_monitor, use_x86, cig, process_topology).map(|pid| format!("Launched {architecture} OroNimbus.exe PID {pid} {display} with requested WDA_NONE (0x00){defenses}")),
+                ID_FOLDER => open_scan_target(use_x86).map(|_| format!("Opened the {architecture} OroNimbus scan-target folder.")),
                 _ => return 0,
             };
             match action {

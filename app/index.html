@@ -13,7 +13,7 @@
         <span class="mark">O</span>
         <div>
           <strong>OroNimbus</strong>
-          <small>Electron WDA browser fixture</small>
+          <small>WDA · CIG · Chromium process lab</small>
         </div>
       </div>
       <div class="state">
@@ -38,8 +38,10 @@
         <option value="monitor">WDA MONITOR</option>
       </select>
       <button id="toggle-wda" class="wide" type="button">WDA on</button>
+      <button id="cig-inspect" class="wide" type="button" title="Read process-local Code Integrity Guard policy">CIG pending</button>
       <button id="module-scan" class="wide" type="button" title="Current main PID; loader-visible module heuristic">Modules pending</button>
-      <span id="process">Starting…</span>
+      <button id="process-map" class="wide" type="button" title="Live Electron/Chromium process roles">Processes pending</button>
+      <span id="process">WDA owner starting…</span>
     </nav>
     <section id="module-panel" class="module-panel" hidden>
       <div class="module-panel-heading">
@@ -55,6 +57,27 @@
         transient loads, data-file loads, and blocked attempts can be missed.
       </p>
       <ol id="module-events" aria-label="Recent first-seen module paths"></ol>
+    </section>
+    <section id="process-panel" class="process-panel" hidden>
+      <div class="module-panel-heading">
+        <div>
+          <strong>Chromium process topology <span>(live observation)</span></strong>
+          <p id="process-summary">Waiting for Electron process metrics…</p>
+        </div>
+        <button id="process-panel-close" type="button" aria-label="Close process topology">Close</button>
+      </div>
+      <p class="process-disclaimer">
+        The same OroNimbus.exe runs distinct main, renderer, GPU, and utility roles. The count is dynamic.
+        Only the main PID owns the top-level WDA window; extra processes do not strengthen WDA or prove injection.
+      </p>
+      <div class="process-table-wrap">
+        <table>
+          <thead>
+            <tr><th>Role</th><th>PID</th><th>Chromium type</th><th>Sandbox</th><th>CPU</th><th>Working set</th><th>Scope</th></tr>
+          </thead>
+          <tbody id="process-rows"></tbody>
+        </table>
+      </div>
     </section>
     <script src="renderer.js"></script>
   </body>

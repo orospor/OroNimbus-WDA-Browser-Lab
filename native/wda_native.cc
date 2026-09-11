@@ -114,6 +114,173 @@ Napi::Value HardenDllSearch(const Napi::CallbackInfo& info) {
   return result;
 }
 
+struct CigPolicyReadback {
+  BOOL ok = FALSE;
+  DWORD last_error = ERROR_SUCCESS;
+  PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY policy = {};
+};
+
+CigPolicyReadback ReadCigPolicy() {
+  CigPolicyReadback readback;
+  SetLastError(ERROR_SUCCESS);
+  readback.ok = GetProcessMitigationPolicy(
+      GetCurrentProcess(), ProcessSignaturePolicy, &readback.policy,
+      sizeof(readback.policy));
+  readback.last_error = readback.ok ? ERROR_SUCCESS : GetLastError();
+  return readback;
+}
+
+void AddCigReadback(Napi::Object result, const CigPolicyReadback& readback) {
+  const bool microsoft_signed_only =
+      readback.ok != FALSE && readback.policy.MicrosoftSignedOnly != 0;
+  const bool signature_policy_effective =
+      readback.ok != FALSE &&
+      (readback.policy.MicrosoftSignedOnly != 0 ||
+       readback.policy.StoreSignedOnly != 0 ||
+       readback.policy.MitigationOptIn != 0);
+  result.Set("getOk", Napi::Boolean::New(result.Env(), readback.ok != FALSE));
+  result.Set("getLastError",
+             Napi::Number::New(result.Env(), readback.last_error));
+  result.Set("flags",
+             Napi::Number::New(result.Env(), readback.policy.Flags));
+  result.Set("microsoftSignedOnly",
+             Napi::Boolean::New(result.Env(),
+                                readback.policy.MicrosoftSignedOnly != 0));
+  result.Set("storeSignedOnly",
+             Napi::Boolean::New(result.Env(),
+                                readback.policy.StoreSignedOnly != 0));
+  result.Set("mitigationOptIn",
+             Napi::Boolean::New(result.Env(),
+                                readback.policy.MitigationOptIn != 0));
+  result.Set("auditMicrosoftSignedOnly",
+             Napi::Boolean::New(
+                 result.Env(), readback.policy.AuditMicrosoftSignedOnly != 0));
+  result.Set("auditStoreSignedOnly",
+             Napi::Boolean::New(result.Env(),
+                                readback.policy.AuditStoreSignedOnly != 0));
+  result.Set("microsoftSignedOnlyEffective",
+             Napi::Boolean::New(result.Env(), microsoft_signed_only));
+  result.Set("signaturePolicyEffective",
+             Napi::Boolean::New(result.Env(), signature_policy_effective));
+  result.Set("effective",
+             Napi::Boolean::New(result.Env(), signature_policy_effective));
+}
+
+Napi::Value InspectCig(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Napi::Object result = Napi::Object::New(env);
+  const CigPolicyReadback readback = ReadCigPolicy();
+  result.Set("requested", Napi::Boolean::New(env, false));
+  result.Set("setAttempted", Napi::Boolean::New(env, false));
+  result.Set("setOk", Napi::Boolean::New(env, false));
+  result.Set("setLastError", Napi::Number::New(env, ERROR_SUCCESS));
+  result.Set("preexisting",
+             Napi::Boolean::New(
+                 env, readback.ok != FALSE &&
+                          (readback.policy.MicrosoftSignedOnly != 0 ||
+                           readback.policy.StoreSignedOnly != 0 ||
+                           readback.policy.MitigationOptIn != 0)));
+  result.Set("beforeFlags", Napi::Number::New(env, readback.policy.Flags));
+  result.Set("pid", Napi::Number::New(env, GetCurrentProcessId()));
+  result.Set("timing", "inspection-only");
+  result.Set("scope", "electron-main-wda-owner-only");
+  result.Set("irreversibleForProcess", Napi::Boolean::New(env, true));
+  AddCigReadback(result, readback);
+  return result;
+}
+
+Napi::Value EnableCig(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  const CigPolicyReadback before = ReadCigPolicy();
+
+  PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY requested_policy = {};
+  requested_policy.MicrosoftSignedOnly = 1;
+  SetLastError(ERROR_SUCCESS);
+  const BOOL set_ok = SetProcessMitigationPolicy(
+      ProcessSignaturePolicy, &requested_policy, sizeof(requested_policy));
+  const DWORD set_error = set_ok ? ERROR_SUCCESS : GetLastError();
+  const CigPolicyReadback after = ReadCigPolicy();
+
+  Napi::Object result = Napi::Object::New(env);
+  result.Set("requested", Napi::Boolean::New(env, true));
+  result.Set("requestedPolicy", "MicrosoftSignedOnly");
+  result.Set("setAttempted", Napi::Boolean::New(env, true));
+  result.Set("setOk", Napi::Boolean::New(env, set_ok != FALSE));
+  result.Set("setLastError", Napi::Number::New(env, set_error));
+  result.Set("preexisting",
+             Napi::Boolean::New(
+                 env, before.ok != FALSE &&
+                          (before.policy.MicrosoftSignedOnly != 0 ||
+                           before.policy.StoreSignedOnly != 0 ||
+                           before.policy.MitigationOptIn != 0)));
+  result.Set("beforeGetOk", Napi::Boolean::New(env, before.ok != FALSE));
+  result.Set("beforeGetLastError",
+             Napi::Number::New(env, before.last_error));
+  result.Set("beforeFlags", Napi::Number::New(env, before.policy.Flags));
+  result.Set("pid", Napi::Number::New(env, GetCurrentProcessId()));
+  result.Set("timing", "post-electron-executable-bootstrap");
+  result.Set("scope", "electron-main-wda-owner-only");
+  result.Set("irreversibleForProcess", Napi::Boolean::New(env, true));
+  AddCigReadback(result, after);
+  return result;
+}
+
+Napi::Value ProbeImageLoad(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  HMODULE containing_module = nullptr;
+  SetLastError(ERROR_SUCCESS);
+  if (!GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCWSTR>(&ProbeImageLoad), &containing_module)) {
+    Napi::Error::New(env, "Could not resolve the native addon's module path")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  std::vector<wchar_t> module_path(32768, L'\0');
+  SetLastError(ERROR_SUCCESS);
+  const DWORD module_path_length = GetModuleFileNameW(
+      containing_module, module_path.data(),
+      static_cast<DWORD>(module_path.size()));
+  if (module_path_length == 0 || module_path_length >= module_path.size()) {
+    Napi::Error::New(env, "Could not read the native addon's module path")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  std::wstring image_path(module_path.data(), module_path_length);
+  const size_t separator = image_path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) {
+    Napi::Error::New(env, "Native addon path has no parent directory")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  image_path.replace(separator + 1, std::wstring::npos,
+                     L"cig_probe_unsigned.node");
+  SetLastError(ERROR_SUCCESS);
+  HMODULE module = LoadLibraryExW(
+      image_path.c_str(), nullptr,
+      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+  const DWORD load_error = module != nullptr ? ERROR_SUCCESS : GetLastError();
+  const BOOL free_ok = module != nullptr ? FreeLibrary(module) : FALSE;
+
+  Napi::Object result = Napi::Object::New(env);
+  result.Set("attempted", Napi::Boolean::New(env, true));
+  result.Set("loaded", Napi::Boolean::New(env, module != nullptr));
+  result.Set("loadLastError", Napi::Number::New(env, load_error));
+  result.Set("blockedByCodeIntegrity",
+             Napi::Boolean::New(
+                 env, module == nullptr &&
+                          load_error == ERROR_INVALID_IMAGE_HASH));
+  result.Set("freed", Napi::Boolean::New(env, free_ok != FALSE));
+  result.Set("expectedBlockedError",
+             Napi::Number::New(env, ERROR_INVALID_IMAGE_HASH));
+  result.Set("scope", "lab-owned-never-preloaded-unsigned-image");
+  return result;
+}
+
 std::string WideToUtf8(const wchar_t* value) {
   if (value == nullptr || value[0] == L'\0') {
     return {};
@@ -248,6 +415,9 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("apply", Napi::Function::New(env, ApplyAffinity));
   exports.Set("inspect", Napi::Function::New(env, InspectAffinity));
   exports.Set("hardenDllSearch", Napi::Function::New(env, HardenDllSearch));
+  exports.Set("enableCig", Napi::Function::New(env, EnableCig));
+  exports.Set("inspectCig", Napi::Function::New(env, InspectCig));
+  exports.Set("probeImageLoad", Napi::Function::New(env, ProbeImageLoad));
   exports.Set("listModules", Napi::Function::New(env, ListModules));
   exports.Set("WDA_NONE", Napi::Number::New(env, WDA_NONE));
   exports.Set("WDA_MONITOR", Napi::Number::New(env, WDA_MONITOR));

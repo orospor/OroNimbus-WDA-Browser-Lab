@@ -6,6 +6,9 @@ const expectWatchdog = expectedFeatures.has('watchdog');
 const expectDllHardening = expectedFeatures.has('dll-hardening');
 const expectLiveWda = expectedFeatures.has('live-wda');
 const expectModuleMonitor = expectedFeatures.has('module-monitor');
+const expectCig = expectedFeatures.has('cig');
+const expectCigProbeBaseline = expectedFeatures.has('cig-probe-baseline');
+const expectProcessTopology = expectedFeatures.has('process-topology');
 const expectedReadbacks = { exclude: 0x11, monitor: 0x01, none: 0x00 };
 if (expectedMode && !Object.hasOwn(expectedReadbacks, expectedMode)) {
   throw new Error(`Unsupported expected WDA mode: ${expectedMode}`);
@@ -71,6 +74,47 @@ if (expectDllHardening) {
       || !hardening?.defaultDirectoriesOk
       || !hardening?.currentDirectoryRemovedOk) {
     throw new Error(`DLL search hardening verification failed: ${JSON.stringify(state)}`);
+  }
+}
+
+let cigState = null;
+if (expectCig) {
+  cigState = await evaluate(`(async () => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const value = await window.oroNimbus.inspectCig();
+      if (value.cig?.getOk && value.cig?.microsoftSignedOnlyEffective) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return window.oroNimbus.getState();
+  })()`);
+  if (!cigState.cigRequested
+      || !cigState.cig?.setAttempted
+      || !cigState.cig?.setOk
+      || !cigState.cig?.getOk
+      || !cigState.cig?.effective
+      || !cigState.cig?.microsoftSignedOnly
+      || !cigState.cig?.microsoftSignedOnlyEffective
+      || !cigState.cig?.signaturePolicyEffective
+      || cigState.cig?.scope !== 'electron-main-wda-owner-only'
+      || cigState.cig?.pid !== cigState.pid
+      || !cigState.cigProbe?.attempted
+      || cigState.cigProbe?.loaded
+      || !cigState.cigProbe?.blockedByCodeIntegrity
+      || cigState.cigProbe?.loadLastError !== cigState.cigProbe?.expectedBlockedError) {
+    throw new Error(`CIG enforcement/readback failed: ${JSON.stringify(cigState)}`);
+  }
+}
+
+let cigBaselineState = null;
+if (expectCigProbeBaseline) {
+  cigBaselineState = await evaluate('window.oroNimbus.inspectCig()');
+  if (cigBaselineState.cigRequested
+      || cigBaselineState.cig?.signaturePolicyEffective
+      || !cigBaselineState.cigProbe?.attempted
+      || !cigBaselineState.cigProbe?.loaded
+      || !cigBaselineState.cigProbe?.freed
+      || cigBaselineState.cigProbe?.blockedByCodeIntegrity) {
+    throw new Error(`CIG baseline probe failed: ${JSON.stringify(cigBaselineState)}`);
   }
 }
 
@@ -179,6 +223,72 @@ if (expectModuleMonitor) {
   })()`);
   if (!modulePanelUi.opened || !modulePanelUi.closed || !modulePanelUi.hasSummary) {
     throw new Error(`Module details panel controls failed: ${JSON.stringify(modulePanelUi)}`);
+  }
+}
+
+let processTopologyState = null;
+let processTopologyUi = null;
+if (expectProcessTopology) {
+  processTopologyState = await evaluate(`(async () => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const value = await window.oroNimbus.scanProcesses();
+      const processes = value.processTopologyProcesses ?? [];
+      const owner = processes.find((entry) => entry.wdaOwner);
+      const ui = processes.find((entry) => entry.role === 'Lab UI renderer');
+      const content = processes.find((entry) => entry.role === 'Web-content renderer');
+      if (owner && ui && content && ui.pid !== content.pid) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return window.oroNimbus.getState();
+  })()`);
+  const topologyProcesses = processTopologyState.processTopologyProcesses ?? [];
+  const owners = topologyProcesses.filter((entry) => entry.wdaOwner);
+  const uiRenderer = topologyProcesses.find((entry) => entry.role === 'Lab UI renderer');
+  const contentRenderer = topologyProcesses.find((entry) => entry.role === 'Web-content renderer');
+  if (!processTopologyState.processTopologyEnabled
+      || processTopologyState.processTopologyLastError !== null
+      || topologyProcesses.length < 3
+      || owners.length !== 1
+      || owners[0].pid !== processTopologyState.pid
+      || owners[0].role !== 'Main / WDA window owner'
+      || owners[0].type !== 'Browser'
+      || !uiRenderer
+      || !contentRenderer
+      || uiRenderer.type !== 'Tab'
+      || contentRenderer.type !== 'Tab'
+      || uiRenderer.pid <= 0
+      || contentRenderer.pid <= 0
+      || uiRenderer.pid === contentRenderer.pid
+      || uiRenderer.sandboxed !== true
+      || contentRenderer.sandboxed !== true) {
+    throw new Error(`Chromium process topology failed: ${JSON.stringify(processTopologyState)}`);
+  }
+
+  processTopologyUi = await evaluate(`(async () => {
+    const trigger = document.querySelector('#process-map');
+    const panel = document.querySelector('#process-panel');
+    const close = document.querySelector('#process-panel-close');
+    trigger.click();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const opened = !panel.hidden;
+    const rows = document.querySelectorAll('#process-rows tr').length;
+    const copy = panel.textContent ?? '';
+    close.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return {
+      opened,
+      closed: panel.hidden,
+      rows,
+      explainsDynamicCount: /count is dynamic/i.test(copy),
+      identifiesWdaOwner: /only the main PID owns/i.test(copy),
+    };
+  })()`);
+  if (!processTopologyUi.opened
+      || !processTopologyUi.closed
+      || processTopologyUi.rows < 3
+      || !processTopologyUi.explainsDynamicCount
+      || !processTopologyUi.identifiesWdaOwner) {
+    throw new Error(`Process topology UI failed: ${JSON.stringify(processTopologyUi)}`);
   }
 }
 
@@ -347,11 +457,15 @@ const windowed = await evaluate(`(async () => {
 
 console.log(JSON.stringify({
   state,
+  cigState,
+  cigBaselineState,
   watchdogState,
   repair,
   moduleMonitorState,
   manualModuleScan,
   modulePanelUi,
+  processTopologyState,
+  processTopologyUi,
   liveWda,
   liveWdaUi,
   fullscreen,

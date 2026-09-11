@@ -10,9 +10,38 @@ $ErrorActionPreference = 'Stop'
 $resolvedRoot = (Resolve-Path -LiteralPath $InstallRoot).Path
 $launcherPath = Join-Path $resolvedRoot 'OroWdaLauncher.exe'
 $browserPath = Join-Path $resolvedRoot 'OroNimbus\OroNimbus.exe'
-foreach ($requiredPath in @($launcherPath, $browserPath)) {
+$x86BrowserPath = Join-Path $resolvedRoot 'OroNimbus-x86\OroNimbus.exe'
+$x86AddonPath = Join-Path $resolvedRoot 'OroNimbus-x86\resources\app.asar.unpacked\native\wda_native.node'
+foreach ($requiredPath in @($launcherPath, $browserPath, $x86BrowserPath, $x86AddonPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
         throw "Required installed executable was not found at $requiredPath"
+    }
+}
+
+function Get-PeMachine([string] $Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $reader = [System.IO.BinaryReader]::new($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "$Path is not a PE file."
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadInt32()
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "$Path has an invalid PE signature."
+        }
+        return $reader.ReadUInt16()
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+foreach ($x86Path in @($x86BrowserPath, $x86AddonPath)) {
+    $machine = Get-PeMachine $x86Path
+    if ($machine -ne 0x014C) {
+        throw ('Expected a 32-bit x86 PE (machine 0x014C), found 0x{0:X4} at {1}' -f $machine, $x86Path)
     }
 }
 
@@ -29,13 +58,29 @@ public static class OroNimbusInstallerTestNative
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowDisplayAffinity(IntPtr window, out uint affinity);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetDlgItem(IntPtr window, int controlId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessage(IntPtr window, uint message, UIntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetProcessMitigationPolicy(
+        IntPtr process,
+        int mitigationPolicy,
+        out uint policyFlags,
+        UIntPtr length);
 }
 '@
 
-function Get-InstalledBrowserProcesses {
+function Get-InstalledBrowserProcesses([string] $ExpectedPath = '') {
     return @(Get-Process -Name 'OroNimbus' -ErrorAction SilentlyContinue | Where-Object {
         try {
-            $_.Path -ieq $browserPath
+            ($_.Path -ieq $browserPath -or $_.Path -ieq $x86BrowserPath) -and (
+                [string]::IsNullOrWhiteSpace($ExpectedPath) -or $_.Path -ieq $ExpectedPath
+            )
         }
         catch {
             $false
@@ -43,11 +88,15 @@ function Get-InstalledBrowserProcesses {
     })
 }
 
-function Wait-ForMainWindow([int[]] $ExcludedProcessIds, [uint32] $ExpectedAffinity) {
+function Wait-ForMainWindow(
+    [int[]] $ExcludedProcessIds,
+    [uint32] $ExpectedAffinity,
+    [string] $ExpectedPath
+) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     $lastObserved = $null
     while ([DateTime]::UtcNow -lt $deadline) {
-        foreach ($process in (Get-InstalledBrowserProcesses)) {
+        foreach ($process in (Get-InstalledBrowserProcesses $ExpectedPath)) {
             if ($ExcludedProcessIds -contains $process.Id) {
                 continue
             }
@@ -70,6 +119,15 @@ function Wait-ForMainWindow([int[]] $ExcludedProcessIds, [uint32] $ExpectedAffin
         Start-Sleep -Milliseconds 200
     }
     throw "OroNimbus did not expose the expected WDA value 0x$($ExpectedAffinity.ToString('X')) within 20 seconds. Last observed: $lastObserved"
+}
+
+function Set-LauncherCheckbox([IntPtr] $LauncherWindow, [int] $ControlId, [bool] $Checked) {
+    $control = [OroNimbusInstallerTestNative]::GetDlgItem($LauncherWindow, $ControlId)
+    if ($control -eq [IntPtr]::Zero) {
+        throw "Launcher control $ControlId was not found."
+    }
+    $value = if ($Checked) { [UIntPtr]::new(1) } else { [UIntPtr]::Zero }
+    [void] [OroNimbusInstallerTestNative]::SendMessage($control, 0x00F1, $value, [IntPtr]::Zero)
 }
 
 function Stop-TestBrowserProcesses([int[]] $PreservedProcessIds) {
@@ -113,27 +171,48 @@ try {
         [pscustomobject]@{ Name = 'MONITOR'; ButtonId = [uint32] 1102; Affinity = [uint32] 0x01 },
         [pscustomobject]@{ Name = 'EXCLUDE'; ButtonId = [uint32] 1101; Affinity = [uint32] 0x11 }
     )
+    $architectures = @(
+        [pscustomobject]@{ Name = 'NATIVE'; X86 = $false; BrowserPath = $browserPath },
+        [pscustomobject]@{ Name = 'X86'; X86 = $true; BrowserPath = $x86BrowserPath }
+    )
 
-    foreach ($mode in $modes) {
-        $beforeLaunch = @(Get-InstalledBrowserProcesses | Select-Object -ExpandProperty Id)
-        $posted = [OroNimbusInstallerTestNative]::PostMessage(
-            $launcher.MainWindowHandle,
-            0x0111,
-            [UIntPtr]::new($mode.ButtonId),
-            [IntPtr]::Zero
-        )
-        if (-not $posted) {
-            throw "Could not invoke the installed launcher's $($mode.Name) button."
+    foreach ($architecture in $architectures) {
+        Set-LauncherCheckbox $launcher.MainWindowHandle 1109 $architecture.X86
+        Set-LauncherCheckbox $launcher.MainWindowHandle 1110 $true
+        foreach ($mode in $modes) {
+            $beforeLaunch = @(Get-InstalledBrowserProcesses | Select-Object -ExpandProperty Id)
+            $posted = [OroNimbusInstallerTestNative]::PostMessage(
+                $launcher.MainWindowHandle,
+                0x0111,
+                [UIntPtr]::new($mode.ButtonId),
+                [IntPtr]::Zero
+            )
+            if (-not $posted) {
+                throw "Could not invoke the installed launcher's $($architecture.Name) $($mode.Name) button."
+            }
+
+            $browser = Wait-ForMainWindow $beforeLaunch $mode.Affinity $architecture.BrowserPath
+            [uint32] $cigFlags = 0
+            $cigReadOk = [OroNimbusInstallerTestNative]::GetProcessMitigationPolicy(
+                $browser.Process.Handle,
+                8,
+                [ref] $cigFlags,
+                [UIntPtr]::new(4)
+            )
+            if (-not $cigReadOk -or ($cigFlags -band 0x01) -eq 0) {
+                $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                throw "CIG MicrosoftSignedOnly was not active for $($architecture.Name) $($mode.Name): flags 0x$($cigFlags.ToString('X')), Win32 error $lastError."
+            }
+            $results.Add([pscustomobject]@{
+                Architecture = $architecture.Name
+                Mode = $mode.Name
+                ProcessId = $browser.Process.Id
+                Affinity = ('0x{0:X}' -f $browser.Affinity)
+                CigFlags = ('0x{0:X}' -f $cigFlags)
+                BrowserPath = $browser.Process.Path
+            })
+            Stop-TestBrowserProcesses $preexistingProcessIds
         }
-
-        $browser = Wait-ForMainWindow $beforeLaunch $mode.Affinity
-        $results.Add([pscustomobject]@{
-            Mode = $mode.Name
-            ProcessId = $browser.Process.Id
-            Affinity = ('0x{0:X}' -f $browser.Affinity)
-            BrowserPath = $browser.Process.Path
-        })
-        Stop-TestBrowserProcesses $preexistingProcessIds
     }
 }
 finally {

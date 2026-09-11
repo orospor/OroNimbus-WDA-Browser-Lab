@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $Version = '0.4.0',
+    [string] $Version = '0.5.0',
 
     [switch] $NoLaunch
 )
@@ -55,8 +55,13 @@ try {
     }
 
     $launcherPath = Join-Path $installRoot 'OroWdaLauncher.exe'
-    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
-        throw "OroWdaLauncher.exe was not found after setup at $launcherPath"
+    $nativeBrowserPath = Join-Path $installRoot 'OroNimbus\OroNimbus.exe'
+    $x86BrowserPath = Join-Path $installRoot 'OroNimbus-x86\OroNimbus.exe'
+    $x86AddonPath = Join-Path $installRoot 'OroNimbus-x86\resources\app.asar.unpacked\native\wda_native.node'
+    foreach ($requiredPath in @($launcherPath, $nativeBrowserPath, $x86BrowserPath, $x86AddonPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Required OroNimbus component was not found after setup at $requiredPath"
+        }
     }
 
     Write-Host "Installed OroNimbus WDA Browser Lab $Version ($architecture) to $installRoot"
