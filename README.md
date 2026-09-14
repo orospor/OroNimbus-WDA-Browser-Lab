@@ -2,6 +2,8 @@
 
 OroNimbus is a controlled Windows research fixture for testing Windows Display Affinity (WDA), process-local Code Integrity Guard (CIG), and defensive-posture analysis on lab-owned windows and processes.
 
+For a detailed control-by-control explanation and a reproducible benign testing matrix, see [ORONIMBUS-RESEARCH-GUIDE.md](ORONIMBUS-RESEARCH-GUIDE.md).
+
 - `OroWdaLauncher.exe` is an unprotected controller.
 - `OroNimbus\OroNimbus.exe` is the native x64 or ARM64 Electron browser selected for the host.
 - `OroNimbus-x86\OroNimbus.exe` is a separate, true 32-bit (`IMAGE_FILE_MACHINE_I386`) Electron browser, not a label applied to a 64-bit process.
